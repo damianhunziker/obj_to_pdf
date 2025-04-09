@@ -1,0 +1,6 @@
+[submodule "obj_to_u3d"]
+	path = obj_to_u3d
+	url = https://github.com/damianhunziker/obj_to_pdf.git
+[submodule "u3d_pdf"]
+	path = u3d_pdf
+	url = https://github.com/damianhunziker/u3d_pdf.git
