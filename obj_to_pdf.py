@@ -60,7 +60,7 @@ class ObjToPdfConverter:
                 print(f"Conversion failed with error code {result.returncode}")
                 print(f"Error output: {result.stderr}")
                 print(f"Command output: {result.stdout}")
-                raise Exception("Failed to convert OBJ to U3D")
+                return None
             
             # Step 2: Create PDF with embedded U3D using latex_3d_pdf.py
             print(f"\nCreating PDF with embedded 3D model: {output_pdf}")
@@ -78,14 +78,14 @@ class ObjToPdfConverter:
                 print(f"PDF creation failed with error code {result.returncode}")
                 print(f"Error output: {result.stderr}")
                 print(f"Command output: {result.stdout}")
-                raise Exception("Failed to create PDF")
+                return None
             
             print(f"\nConversion complete! PDF saved to: {output_pdf}")
             return output_pdf
             
         except Exception as e:
             print(f"Error converting OBJ to PDF: {str(e)}")
-            raise
+            return None
 
 def main():
     parser = argparse.ArgumentParser(description="Convert OBJ files to PDF")
@@ -100,7 +100,7 @@ def main():
     if pdf_file:
         print(f"Successfully converted {args.obj_file} to {pdf_file}")
     else:
-        print("Conversion failed")
+        print("Conversion faisled")
         sys.exit(1)
 
 if __name__ == "__main__":
