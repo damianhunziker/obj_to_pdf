@@ -19,7 +19,7 @@ from pathlib import Path
 import argparse
 
 class ObjToPdfConverter:
-    def __init__(self):
+    def __init__(self, progress_callback=None):
         """Initialize the converter"""
         # Create output directory
         self.output_dir = Path("output")
@@ -27,6 +27,28 @@ class ObjToPdfConverter:
         
         # Get the script directory
         self.script_dir = Path(__file__).parent
+        
+        # Store progress callback
+        self.progress_callback = progress_callback
+    
+    def update_progress(self, phase, phase_progress, message):
+        """Convert phase progress to total progress (30-70% range for U3D conversion)"""
+        if not self.progress_callback:
+            return
+            
+        # Phase weights in the 30-70% range
+        phase_ranges = {
+            'load': (30, 40),      # 10%
+            'decimation': (40, 50), # 10%
+            'normals': (50, 60),    # 10%
+            'u3d': (60, 70)        # 10%
+        }
+        
+        if phase in phase_ranges:
+            start, end = phase_ranges[phase]
+            # Calculate progress within the phase's range
+            total_progress = start + (phase_progress * (end - start) / 100)
+            self.progress_callback(total_progress, message)
     
     def convert(self, obj_file: str, output_pdf: str = None) -> str:
         """Convert OBJ file to PDF with embedded 3D model."""
@@ -45,21 +67,19 @@ class ObjToPdfConverter:
             print(f"\n==== Converting {obj_file} to U3D ====")
             u3d_output = f"output/{base_name}.u3d"
             
-            cmd = [
-                "python", str(self.script_dir / "obj_to_u3d" / "pymeshlab_u3d_example.py"),
-                str(obj_file),
+            # Import convert_to_u3d function
+            sys.path.append(str(self.script_dir / "obj_to_u3d"))
+            from pymeshlab_u3d_example import convert_to_u3d
+            
+            # Convert to U3D with progress tracking
+            success = convert_to_u3d(
+                obj_file,
                 u3d_output,
-                "--clean",
-                "--simplify", "5000"
-            ]
+                progress_callback=self.update_progress
+            )
             
-            print(f"Running command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"Conversion failed with error code {result.returncode}")
-                print(f"Error output: {result.stderr}")
-                print(f"Command output: {result.stdout}")
+            if not success:
+                print("U3D conversion failed")
                 return None
             
             # Step 2: Create PDF with embedded U3D using latex_3d_pdf.py

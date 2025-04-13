@@ -18,6 +18,27 @@ import socket
 from werkzeug.utils import secure_filename
 from obj_to_pdf import ObjToPdfConverter
 
+# Neue Imports hinzufügen
+from flask import Response
+import json
+import time
+
+# Progress-Tracking Dictionary anpassen
+conversion_status = {}
+
+def progress_handler(job_id):
+    """Callback-Funktion für Fortschrittsupdates"""
+    def handle_progress(progress, message):
+        conversion_status[job_id] = {
+            'progress': progress,
+            'message': message,
+            'timestamp': time.time()
+        }
+        logger.info(f"Job {job_id}: {progress}% - {message}")
+    return handle_progress
+
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -235,59 +256,115 @@ def health_check():
 
 @app.route('/convert', methods=['POST'])
 def convert():
-    if 'file' not in request.files:
-        return jsonify({'success': False, 'message': 'No file part'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'success': False, 'message': 'No selected file'}), 400
-    
-    if not allowed_file(file.filename):
-        return jsonify({'success': False, 'message': 'Invalid file type'}), 400
-    
     try:
-        # Generate unique job ID
-        job_id = str(uuid.uuid4())
-        logger.info(f"Starting new conversion job: {job_id}")
+        if 'file' not in request.files:
+            logger.error("No file part in request")
+            return jsonify({'success': False, 'message': 'No file part'}), 400
         
-        # Save uploaded file with sanitized name
-        filename = secure_filename(file.filename)
-        sanitized_filename = sanitize_filename(f"{job_id}_{filename}")
-        obj_path = os.path.join(UPLOAD_FOLDER, sanitized_filename)
-        file.save(obj_path)
-        logger.info(f"Saved uploaded file to: {obj_path}")
+        file = request.files['file']
+        if file.filename == '':
+            logger.error("No selected file")
+            return jsonify({'success': False, 'message': 'No selected file'}), 400
         
-        # Set output PDF path
-        base_name = os.path.splitext(sanitized_filename)[0]
-        output_pdf = os.path.join(OUTPUT_FOLDER, f"{base_name}.pdf")
-        logger.info(f"Output PDF will be: {output_pdf}")
+        if not allowed_file(file.filename):
+            logger.error(f"Invalid file type: {file.filename}")
+            return jsonify({'success': False, 'message': 'Invalid file type'}), 400
         
-        # Do conversion directly (not in background)
         try:
-            download_url = convert_using_script(obj_path, output_pdf, job_id)
-            if download_url:
-                logger.info(f"Conversion successful, download URL: {download_url}")
-                return jsonify({
-                    'success': True,
-                    'downloadUrl': download_url,
-                    'message': 'Conversion successful'
-                })
-            else:
-                logger.error("Conversion failed - no download URL")
+            # Generate unique job ID
+            job_id = str(uuid.uuid4())
+            logger.info(f"Starting new conversion job: {job_id}")
+            
+            # Save uploaded file with sanitized name
+            filename = secure_filename(file.filename)
+            sanitized_filename = sanitize_filename(f"{job_id}_{filename}")
+            obj_path = os.path.join(UPLOAD_FOLDER, sanitized_filename)
+            
+            # Ensure upload directory exists
+            os.makedirs(os.path.dirname(obj_path), exist_ok=True)
+            
+            # Save file
+            logger.info(f"Saving file to: {obj_path}")
+            file.save(obj_path)
+            
+            if not os.path.exists(obj_path):
+                raise Exception(f"Failed to save file at: {obj_path}")
+            
+            # Set output PDF path
+            base_name = os.path.splitext(sanitized_filename)[0]
+            output_pdf = os.path.join(OUTPUT_FOLDER, f"{base_name}.pdf")
+            
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_pdf), exist_ok=True)
+            
+            logger.info(f"Output PDF will be: {output_pdf}")
+            
+            # Initialize converter with progress handler
+            converter = ObjToPdfConverter(progress_callback=progress_handler(job_id))
+            
+            try:
+                # Start conversion
+                logger.info(f"Starting conversion for job {job_id}")
+                logger.info(f"Current working directory: {os.getcwd()}")
+                logger.info(f"Input file exists: {os.path.exists(obj_path)}")
+                logger.info(f"Input file size: {os.path.getsize(obj_path)}")
+                
+                pdf_file = converter.convert(obj_path, output_pdf)
+                logger.info(f"Conversion result: {pdf_file}")
+                
+                if pdf_file and os.path.exists(pdf_file):
+                    download_url = f"http://{get_local_ip()}:5000/download/{job_id}"
+                    logger.info(f"Conversion successful, download URL: {download_url}")
+                    
+                    # Update final status
+                    conversion_status[job_id] = {
+                        'progress': 100,
+                        'message': 'Konvertierung erfolgreich abgeschlossen'
+                    }
+                    
+                    return jsonify({
+                        'success': True,
+                        'downloadUrl': download_url,
+                        'message': 'Conversion successful'
+                    })
+                else:
+                    error_msg = "Conversion failed - PDF not created"
+                    logger.error(error_msg)
+                    # Update status with error
+                    conversion_status[job_id] = {
+                        'progress': -1,
+                        'message': error_msg
+                    }
+                    return jsonify({
+                        'success': False,
+                        'message': error_msg
+                    }), 500
+                    
+            except Exception as e:
+                error_msg = f"Error during conversion: {str(e)}"
+                logger.error(error_msg)
+                logger.exception("Full stack trace:")
+                # Update status with error
+                conversion_status[job_id] = {
+                    'progress': -1,
+                    'message': f"Konvertierungsfehler: {str(e)}"
+                }
                 return jsonify({
                     'success': False,
-                    'message': 'Conversion failed - no download URL'
+                    'message': error_msg
                 }), 500
+                
         except Exception as e:
-            logger.error(f"Conversion error: {str(e)}")
+            error_msg = f"Error handling file: {str(e)}"
+            logger.error(error_msg)
             logger.exception("Full stack trace:")
             return jsonify({
                 'success': False,
-                'message': str(e)
+                'message': error_msg
             }), 500
-        
+            
     except Exception as e:
-        error_msg = f"Error in /convert: {str(e)}"
+        error_msg = f"General error in /convert: {str(e)}"
         logger.error(error_msg)
         logger.exception("Full stack trace:")
         return jsonify({
@@ -296,24 +373,30 @@ def convert():
         }), 500
 
 @app.route('/progress/<job_id>')
-def progress(job_id):
-    progress = conversion_progress.get(job_id, 0)
-    download_url = None
+def get_progress(job_id):
+    """Stream conversion progress updates"""
+    def generate():
+        while True:
+            if job_id in conversion_status:
+                status = conversion_status[job_id]
+                # Konvertiere Status in JSON und sende als SSE
+                yield f"data: {json.dumps(status)}\n\n"
+                
+                # Wenn Konvertierung abgeschlossen oder fehlgeschlagen
+                if status['progress'] >= 100 or status['progress'] == -1:
+                    break
+            
+            time.sleep(0.1)  # Kleine Pause zwischen Updates
     
-    if progress == 100:
-        # Find the generated PDF
-        for filename in os.listdir(OUTPUT_FOLDER):
-            if job_id in filename and filename.endswith('.pdf'):
-                # Generate download URL
-                server_ip = get_local_ip()
-                download_url = f"http://{server_ip}:5000/download/{job_id}"
-                logger.info(f"PDF ready for download at: {download_url}")
-                break
-    
-    return jsonify({
-        'progress': progress,
-        'download_url': download_url
-    })
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 @app.route('/download/<job_id>')
 def download(job_id):
