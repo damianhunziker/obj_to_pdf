@@ -4,7 +4,7 @@ OBJ to PDF Converter
 This script converts OBJ files to PDF format through U3D intermediate format
 
 Workflow:
-1. OBJ -> U3D: Using pymeshlab_u3d_example.py
+1. OBJ -> U3D: Using example_workflow.py
 2. U3D -> PDF: Using latex_3d_pdf.py
 
 Requirements:
@@ -14,12 +14,18 @@ Requirements:
 
 import os
 import sys
+import logging
 import subprocess
 from pathlib import Path
 import argparse
 
+# Configure logging
+logging.basicConfig(level=logging.INFO,
+                   format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 class ObjToPdfConverter:
-    def __init__(self):
+    def __init__(self, progress_callback=None):
         """Initialize the converter"""
         # Create output directory
         self.output_dir = Path("output")
@@ -27,6 +33,9 @@ class ObjToPdfConverter:
         
         # Get the script directory
         self.script_dir = Path(__file__).parent
+        
+        # Store progress callback
+        self.progress_callback = progress_callback
     
     def convert(self, obj_file: str, output_pdf: str = None) -> str:
         """Convert OBJ file to PDF with embedded 3D model."""
@@ -41,50 +50,59 @@ class ObjToPdfConverter:
             # Ensure output directories exist
             os.makedirs("output/pdf", exist_ok=True)
             
-            # Step 1: Convert OBJ to U3D using pymeshlab_u3d_example.py
-            print(f"\n==== Converting {obj_file} to U3D ====")
+            # Import example_workflow
+            sys.path.append(str(self.script_dir / "obj_to_u3d"))
+            import example_workflow
+            
+            # Step 1: Convert OBJ to U3D
+            logger.info(f"\n==== Converting {obj_file} to U3D ====")
             u3d_output = f"output/{base_name}.u3d"
             
-            cmd = [
-                "python", str(self.script_dir / "obj_to_u3d" / "pymeshlab_u3d_example.py"),
-                str(obj_file),
-                u3d_output,
-                "--clean",
-                "--simplify", "5000"
-            ]
+            if self.progress_callback:
+                self.progress_callback('load', 0, 'Lade 3D-Modell...')
             
-            print(f"Running command: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"Conversion failed with error code {result.returncode}")
-                print(f"Error output: {result.stderr}")
-                print(f"Command output: {result.stdout}")
+            # Convert to U3D using example_workflow
+            if not example_workflow.obj_to_u3d(obj_file, u3d_output, simplify=5000):
+                logger.error("U3D conversion failed")
+                if self.progress_callback:
+                    self.progress_callback('error', -1, 'U3D-Konvertierung fehlgeschlagen')
                 return None
             
+            if self.progress_callback:
+                self.progress_callback('u3d', 50, 'U3D-Konvertierung erfolgreich. Erstelle PDF...')
+            
             # Step 2: Create PDF with embedded U3D using latex_3d_pdf.py
-            print(f"\nCreating PDF with embedded 3D model: {output_pdf}")
+            logger.info(f"\nCreating PDF with embedded 3D model: {output_pdf}")
+            
             cmd = [
-                "python", str(self.script_dir / "u3d_pdf" / "latex_3d_pdf.py"),
+                "python",
+                str(self.script_dir / "u3d_pdf" / "latex_3d_pdf.py"),
                 u3d_output,
                 output_pdf,
                 "--title", f"{base_name} 3D Model"
             ]
             
-            print(f"Running command: {' '.join(cmd)}")
+            logger.info(f"Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode != 0:
-                print(f"PDF creation failed with error code {result.returncode}")
-                print(f"Error output: {result.stderr}")
-                print(f"Command output: {result.stdout}")
+                logger.error(f"PDF creation failed with error code {result.returncode}")
+                logger.error(f"Error output: {result.stderr}")
+                logger.error(f"Command output: {result.stdout}")
+                if self.progress_callback:
+                    self.progress_callback('error', -1, 'PDF-Erstellung fehlgeschlagen')
                 return None
             
-            print(f"\nConversion complete! PDF saved to: {output_pdf}")
+            if self.progress_callback:
+                self.progress_callback('pdf', 100, 'PDF erfolgreich erstellt')
+            
+            logger.info(f"\nConversion complete! PDF saved to: {output_pdf}")
             return output_pdf
             
         except Exception as e:
-            print(f"Error converting OBJ to PDF: {str(e)}")
+            logger.error(f"Error converting OBJ to PDF: {str(e)}")
+            if self.progress_callback:
+                self.progress_callback('error', -1, f'Fehler bei der Konvertierung: {str(e)}')
             return None
 
 def main():
@@ -98,9 +116,9 @@ def main():
     pdf_file = converter.convert(args.obj_file, args.output)
     
     if pdf_file:
-        print(f"Successfully converted {args.obj_file} to {pdf_file}")
+        logger.info(f"Successfully converted {args.obj_file} to {pdf_file}")
     else:
-        print("Conversion faisled")
+        logger.error("Conversion failed")
         sys.exit(1)
 
 if __name__ == "__main__":
